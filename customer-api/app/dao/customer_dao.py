@@ -48,15 +48,19 @@ class CustomerDAO:
         return list(result.scalars().all())
 
     async def update(self, customer_id: uuid.UUID, data: dict) -> Customer | None:
-        stmt = (
-            update(Customer)
-            .where(Customer.id == customer_id, self._active_filter())
-            .values(**data)
-            .returning(Customer)
-        )
-        result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.scalar_one_or_none()
+        try:
+            stmt = (
+                update(Customer)
+                .where(Customer.id == customer_id, self._active_filter())
+                .values(**data)
+                .returning(Customer)
+            )
+            result = await self.session.execute(stmt)
+            await self.session.commit()
+            return result.scalar_one_or_none()
+        except IntegrityError:
+            await self.session.rollback()
+            raise DuplicateEmailError()
 
     async def soft_delete(self, customer_id: uuid.UUID) -> bool:
         stmt = (

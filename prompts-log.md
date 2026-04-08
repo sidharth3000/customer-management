@@ -290,3 +290,189 @@ Verified all fixes with tests:
 - Future DOB rejected ✅
 - Duplicate email caught ✅
 - Clean error responses (no stack traces) ✅
+
+---
+
+## Prompt 22: Test Setup — conftest.py and Dependencies
+
+**User:**
+> I need to add tests for my project. Set up a tests folder with conftest.py. I need a test database setup — create an async test session that uses a separate test database (not the main one). Use pytest and pytest-asyncio. Add all testing dependencies to requirements.txt — pytest, pytest-asyncio, httpx for testing FastAPI endpoints. Keep the conftest simple, I need a fixture that gives me a clean database for each test — create tables before and drop after.
+
+**Response:**
+Created test infrastructure:
+- `tests/__init__.py` — package init
+- `tests/conftest.py` — test database setup with `TEST_DATABASE_URL` derived from main URL (appends `_test`), `NullPool` engine, two fixtures:
+  - `db_session` — creates tables before each test, yields `AsyncSession`, drops tables after
+  - `client` — overrides `get_db` with test session, yields `httpx.AsyncClient`, clears overrides after
+- `pytest.ini` — `asyncio_mode = auto`, `asyncio_default_fixture_loop_scope = function`
+- Updated `requirements.txt` — added pytest==8.3.5, pytest-asyncio==0.25.3, httpx==0.28.1
+
+---
+
+## Prompt 23: Plan DAO Test Cases
+
+**User:**
+> Before writing any tests, tell me what test cases you think we should cover for the CustomerDAO. List them out so I can review before we write anything.
+
+**Response:**
+Proposed 20 test cases grouped by method:
+- **create** (3): success, duplicate email raises, duplicate allowed after soft-delete
+- **get_by_id** (3): found, nonexistent, soft-deleted
+- **get_by_email** (3): found, nonexistent, soft-deleted
+- **get_all** (4): all active, excludes deleted, pagination, empty
+- **update** (4): success, nonexistent, soft-deleted, duplicate email
+- **soft_delete** (3): success, nonexistent, already deleted
+
+---
+
+## Prompt 24: Write DAO Tests
+
+**User:**
+> Looks good but also add a case for soft delete — after soft deleting a customer both get_by_id and get_all should not return that customer. Go ahead and write all the tests in tests/test_customer_dao.py. Use a helper function to generate sample customer data so we don't repeat the same dict everywhere.
+
+**Response:**
+Created `tests/test_customer_dao.py` with 21 tests:
+- `sample_customer_data(**overrides)` helper returning default customer dict
+- All 20 planned cases plus the extra `test_soft_delete_excludes_from_get_by_id_and_get_all`
+
+---
+
+## Prompt 25: Confirm Test Session Usage
+
+**User:**
+> The tests need to use the test session from conftest not the real db session. Make sure each test creates the dao with the test async session fixture.
+
+**Response:**
+Confirmed tests already use the `db_session` fixture from conftest, which yields sessions from `TestSessionLocal` backed by `TEST_DATABASE_URL`. No changes needed.
+
+---
+
+## Prompt 26: Plan Service Test Cases
+
+**User:**
+> Same thing for the service layer — what test cases should we cover for CustomerService? List them out.
+
+**Response:**
+Proposed 13 test cases:
+- **create_customer** (2): success, duplicate email raises
+- **get_customer** (2): found, not found raises
+- **get_all_customers** (2): returns list, empty
+- **update_customer** (5): success, duplicate email raises, own email allowed, not found raises, partial update preserves fields
+- **delete_customer** (2): success, not found raises
+
+---
+
+## Prompt 27: Write Service Tests
+
+**User:**
+> Yeah those cover it. Also make sure there's a case for updating email to one that another customer already has — should raise duplicate error. Write them in tests/test_customer_service.py.
+
+**Response:**
+Created `tests/test_customer_service.py` with 13 tests:
+- `make_create_data(**overrides)` helper returning `CustomerCreate` schema
+- `make_service(db_session)` helper building the full `CustomerService → CustomerDAO → session` chain
+- All planned cases including duplicate email on update
+
+---
+
+## Prompt 28: Plan Router Test Cases
+
+**User:**
+> Now list out test cases for the API endpoints. Think about both happy path and error cases — invalid data, missing fields, not found, duplicate email etc.
+
+**Response:**
+Proposed 22 test cases:
+- **POST /customers** (8): valid, optional fields omitted, duplicate email 409, missing field 422, invalid email 422, credit score too low/high 422, future DOB 422
+- **GET /customers** (3): list, empty, pagination
+- **GET /customers/{id}** (3): found, not found 404, invalid UUID 422
+- **PUT /customers/{id}** (5): success, partial, duplicate email 409, not found 404, invalid credit score 422
+- **DELETE /customers/{id}** (3): success 204, not found 404, deleted not retrievable
+
+---
+
+## Prompt 29: Write Router Tests
+
+**User:**
+> Good list. Write them in tests/test_customer_router.py using httpx AsyncClient. One thing — the client needs to use our test database not the real one so we'll need to override the get_db dependency.
+
+**Response:**
+Created `tests/test_customer_router.py` with 22 tests:
+- `sample_payload(**overrides)` helper returning JSON-serializable dict
+- `_create_customer(client, **overrides)` helper for quick setup
+- All tests use the `client` fixture from conftest which already overrides `get_db`
+
+---
+
+## Prompt 30: Confirm Client Fixture Exists
+
+**User:**
+> Add a fixture in conftest.py for the async httpx client that overrides get_db with our test session. Make sure dependency override is cleaned up after tests are done.
+
+**Response:**
+Confirmed the `client` fixture already exists in conftest.py (lines 37-53). It overrides `get_db`, yields the `AsyncClient`, and calls `app.dependency_overrides.clear()` on cleanup.
+
+---
+
+## Prompt 31: Run Tests and Fix Failures
+
+**User:**
+> Run pytest -v and check if everything passes. Fix whatever fails.
+
+**Response:**
+Fixed three issues:
+1. **conftest.py** — `DATABASE_URL` used Docker hostname `postgres` which doesn't resolve locally. Added `.replace("@postgres:", "@localhost:")` and `NullPool` to prevent connection pool issues across event loops.
+2. **pytest.ini** — Added `asyncio_default_fixture_loop_scope = function` to suppress deprecation warning.
+3. **customer_dao.py** — `update()` method was missing `IntegrityError` handling. Added `try/except IntegrityError` with rollback and `DuplicateEmailError`, matching the pattern in `create()`.
+
+Result: **56 tests passed**.
+
+---
+
+## Prompt 32: Add Coverage
+
+**User:**
+> Add pytest-cov to requirements.txt. Configure pytest in pyproject.toml to run coverage on the app folder automatically, show missing lines in terminal, and also generate an HTML report. Set minimum coverage to 80% so tests fail if it drops below that.
+
+**Response:**
+- Added `pytest-cov==6.1.1` to `requirements.txt`
+- Created `pyproject.toml` with pytest and coverage config:
+  - `addopts = "--cov=app --cov-report=term-missing --cov-report=html --cov-fail-under=80"`
+  - `exclude_lines = ["if __name__"]`
+- Deleted `pytest.ini` (settings moved to `pyproject.toml`)
+- Result: 56 tests, 93.85% coverage
+
+---
+
+## Prompt 33: Coverage Gaps
+
+**User:**
+> Run pytest with coverage and show me the report. If anything is below 80% tell me what's not covered and add tests for those.
+
+**Response:**
+Two files were below 80%:
+- `database.py` (60%) — `get_db()` body never executed (overridden in tests)
+- `main.py` (73%) — lifespan and health check uncovered
+
+Added:
+- `tests/test_database.py` — tests real `get_db` yields and closes a session
+- `tests/test_main.py` — tests health check endpoint and lifespan (patched to use test engine)
+- `pyproject.toml` — added `exclude_lines = ["if __name__"]` for the `__main__` guard
+
+Result: **59 tests passed, 97.93% coverage**, all files above 80%.
+
+---
+
+## Prompt 34: Add Test Descriptions
+
+**User:**
+> Add small description above every test case so in future if any test fails we know what went wrong.
+
+**Response:**
+Added docstrings to all 59 tests across 5 files:
+- `test_customer_dao.py` — 21 tests
+- `test_customer_service.py` — 13 tests
+- `test_customer_router.py` — 22 tests
+- `test_main.py` — 2 tests
+- `test_database.py` — 1 test
+
+Each docstring describes what the test verifies (e.g., "Should raise DuplicateEmailError when email is already taken by an active customer"). All 59 tests still passing, 97.93% coverage.
